@@ -56,3 +56,4 @@
 - [하드웨어 선택](docs/hardware-selection.md)
 - [서비스 구성](docs/services.md)
 - [스토리지 정책](docs/storage-policy.md)
+- [백업 정책](docs/backup-policy.md)
