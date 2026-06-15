@@ -54,3 +54,4 @@
 ## 문서
 
 - [하드웨어 선택](docs/hardware-selection.md)
+- [서비스 구성](docs/services.md)
