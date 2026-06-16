@@ -57,3 +57,4 @@
 - [서비스 구성](docs/services.md)
 - [스토리지 정책](docs/storage-policy.md)
 - [백업 정책](docs/backup-policy.md)
+- [시스템 아키텍처](docs/architecture/system/overview.md)
