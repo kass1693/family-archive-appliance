@@ -29,7 +29,6 @@
 ├── medium/
 │   └── {UUID}_medium.{ext}
 ├── metadata/
-│   └── family-archive.sqlite
 ├── import/
 │   └── pending/
 └── trash/
