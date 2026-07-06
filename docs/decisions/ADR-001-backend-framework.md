@@ -93,4 +93,4 @@ Fastify를 HTTP 레이어로 사용하고, 레이어 분리(Presentation / Useca
 - 없음 (첫 번째 ADR)
 
 ### 관련 문서
-- [시스템 아키텍처 개요](../system/overview.md)
+- [시스템 아키텍처 개요](../architecture/system/overview.md)
