@@ -64,8 +64,8 @@
 
 1. [Presentation] `POST /api/photos` 수신, 파일 버퍼·원본명·MIME 타입을 `UploadPhotoCommand`로 변환
 2. [Usecase] `UploadPhotoUsecase` 실행
-3. [Infrastructure] `PhotoFileStore.saveToTemp(buffer)` → 임시 경로에 저장
-4. [Infrastructure] `HashCalculator.compute(buffer)` → SHA-256 hash 계산 (서버 계산, 파일 저장과 독립적인 관심사)
+3. [Infrastructure] `HashCalculator.compute(buffer)` → SHA-256 hash 계산
+4. [Infrastructure] `PhotoFileStore.saveToTemp(buffer)` → 임시 경로에 저장
 5. [Domain] `PhotoStoragePath`로 `originals/YYYY/MM/DD/{UUID}.{ext}` 최종 경로 생성
 6. [Infrastructure] `PhotoFileStore.moveToFinal(tempPath, finalPath)` → 최종 경로로 이동
 7. [Infrastructure] `ExifParser.parse(finalPath)` → EXIF 파싱 (실패 시 빈 EXIF로 계속)
@@ -192,7 +192,7 @@
 - 출력: `[{ id: string }]` (성공한 파일의 UUID 목록)
 - 반환 규칙:
   - 전체 성공: 201
-  - 실패: 500 (개별 파일 실패는 다른 파일 처리를 중단하지 않음)
+  - 실패: 500 (파일 중 하나라도 실패 시 전체 요청 실패)
 - 제약 사항: 동일 hash라도 거부하지 않는다.
 - 관련 요구사항: REQ-F-002, REQ-F-003, REQ-F-004
 
