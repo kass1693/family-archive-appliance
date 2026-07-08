@@ -101,7 +101,7 @@
 - 출력: `[{ id: string }]` 또는 HTTP 에러 응답
 - 주요 처리: 요청 수신 → 파일별 커맨드 변환 → 파일별 Usecase 호출 → 하나라도 실패 시 전체 실패 처리 → 전체 성공 시 결과 배열 반환
 - 의존 대상: `UploadPhotoUsecase`
-- 관련 요구사항: REQ-F-002
+- 관련 요구사항: REQ-F-005, REQ-NF-004
 
 ### DuplicateCheckController
 
@@ -119,7 +119,7 @@
 - 입력: `UploadPhotoCommand`
 - 출력: `{ id: string }`
 - 의존 대상: `PhotoFileStore`, `HashCalculator`, `PhotoRepository`, `ExifParser`, `ImageConverter`
-- 관련 요구사항: REQ-F-002, REQ-F-003, REQ-F-004, REQ-NF-001, REQ-NF-002
+- 관련 요구사항: REQ-F-002, REQ-F-003, REQ-F-004, REQ-F-005, REQ-NF-001, REQ-NF-002
 
 ### CheckDuplicatesUsecase
 
@@ -137,12 +137,14 @@
 - 입력: 파일 버퍼, 경로
 - 출력: 저장된 경로 또는 에러
 - 의존 대상: 파일시스템
+- 관련 요구사항: REQ-F-002, REQ-NF-002, REQ-NF-003
 
 ### PhotoRepository
 
 - 목적: DB CRUD
 - 책임: Photo 도큐먼트 저장, hash 기반 조회, needsConversion 갱신
 - 의존 대상: MongoDB
+- 관련 요구사항: REQ-F-001, REQ-F-003
 
 ### ExifParser
 
@@ -150,6 +152,7 @@
 - 책임: EXIF 파싱, 실패 시 빈 결과 반환
 - 입력: 파일 경로
 - 출력: `Record<string, unknown>` (파싱 실패 시 빈 객체)
+- 관련 요구사항: REQ-F-003
 
 ### HashCalculator
 
@@ -158,6 +161,7 @@
 - 입력: 파일 buffer
 - 출력: SHA-256 hex 문자열
 - 의존 대상: 없음 (표준 crypto 라이브러리)
+- 관련 요구사항: REQ-F-002
 
 ### ImageConverter
 
@@ -165,6 +169,7 @@
 - 책임: thumbnail, medium 크기 파일 생성
 - 입력: 원본 파일 경로, 대상 저장 경로
 - 출력: 생성된 파일 경로 목록 또는 에러
+- 관련 요구사항: REQ-F-004
 
 ---
 
@@ -288,12 +293,14 @@
 | 요구사항 ID | 요구사항 요약 | 설계 반영 위치 | 설계 내용 |
 | ---------- | ------- | -------- | ----- |
 | REQ-F-001 | 중복 확인 응답 | CheckDuplicatesUsecase, PhotoRepository | hash 목록 비교 후 중복 항목 반환 |
-| REQ-F-002 | 파일 수신 및 저장 | UploadPhotoUsecase, PhotoFileStore | pending → stored 상태 전이, 임시 저장 후 이동 |
+| REQ-F-002 | 파일 수신 및 저장 | UploadPhotoUsecase, PhotoFileStore, HashCalculator | hash 계산 → 임시 저장 → 최종 경로 이동 |
 | REQ-F-003 | EXIF 파싱 및 메타데이터 저장 | ExifParser, PhotoRepository | 파싱 실패 시 빈 EXIF로 저장 |
 | REQ-F-004 | 변환 파일 생성 | ImageConverter, UploadPhotoUsecase | 실패 시 needsConversion=true 기록 |
+| REQ-F-005 | 다중 파일 수신 및 처리 | PhotoUploadController, UploadPhotoUsecase | Controller가 파일별로 Usecase 호출, 전체 결과 배열 반환 |
 | REQ-NF-001 | 업로드 원자성 | UploadPhotoUsecase | 전 단계 완료 시 성공, 중간 실패 시 복구 |
-| REQ-NF-002 | 부분 실패 시 상태 일관성 | UploadPhotoUsecase | DB 실패 시 Usecase가 파일 삭제 |
-| REQ-NF-003 | 원본 파일 불변성 | PhotoFileStore | 최종 경로 파일은 저장 이후 쓰기 접근하지 않음. 변환 파일 생성 시에도 원본을 읽기 전용으로 접근. |
+| REQ-NF-002 | 부분 실패 시 상태 일관성 | UploadPhotoUsecase, PhotoFileStore | DB 실패 시 Usecase가 파일 삭제 |
+| REQ-NF-003 | 원본 파일 불변성 | PhotoFileStore | 최종 경로 파일은 저장 이후 쓰기 접근하지 않음 |
+| REQ-NF-004 | 다중 파일 업로드 실패 정책 | PhotoUploadController | 파일 중 하나라도 실패 시 전체 요청을 실패 응답으로 처리 |
 
 ---
 
