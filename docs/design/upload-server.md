@@ -37,7 +37,7 @@
   - Presentation이 HTTP 요청을 수신하고 Usecase에 위임한다. Usecase는 흐름을 조율하며 Infrastructure를 통해 파일 I/O, DB 접근, 파싱, 변환을 수행한다. Domain은 최종 저장 경로의 형식 규칙과 엔티티를 정의한다. 임시 저장 경로(`import/pending/`)는 Infrastructure 내부 상수이며 Domain과 무관하다.
 - 주요 구성 요소:
   - Presentation: `PhotoUploadController`, `DuplicateCheckController`
-  - Usecase: `UploadPhotoUsecase`, `CheckDuplicatesUsecase`
+  - Usecase: `UploadPhotosUsecase`, `UploadPhotoUsecase`, `CheckDuplicatesUsecase`
   - Domain: `Photo` 엔티티, `PhotoStoragePath` 값 객체
   - Infrastructure: `PhotoFileStore`, `PhotoRepository`, `ExifParser`, `ImageConverter`
 - 주요 설계 결정:
@@ -61,32 +61,32 @@
 
 ### 업로드 정상 흐름
 
-파일별로 아래 흐름이 독립적으로 실행된다.
-
-1. [Presentation] `POST /api/photos` 수신, 파일 버퍼·원본명·MIME 타입을 `UploadPhotoCommand`로 변환
-2. [Usecase] `UploadPhotoUsecase` 실행
-3. [Infrastructure] `HashCalculator.compute(buffer)` → SHA-256 hash 계산
-4. [Infrastructure] `PhotoFileStore.saveToTemp(buffer)` → 임시 경로에 저장
-5. [Domain] `PhotoStoragePath`로 `originals/YYYY/MM/DD/{UUID}.{ext}` 최종 경로 생성
-6. [Infrastructure] `PhotoFileStore.moveToFinal(tempPath, finalPath)` → 최종 경로로 이동
-7. [Infrastructure] `ExifParser.parse(finalPath)` → EXIF 파싱 (실패 시 빈 EXIF로 계속)
-8. [Infrastructure] `PhotoRepository.save(photo)` → DB 레코드 생성
-9. [Infrastructure] `ImageConverter.convert(finalPath)` → thumbnail, medium 생성
-10. [Presentation] 전체 결과를 배열로 반환
+1. [Presentation] `POST /api/photos` 수신, 파일 목록을 `UploadPhotosCommand`로 변환
+2. [Usecase] `UploadPhotosUsecase` 실행, 파일별로 `UploadPhotoUsecase` 순차 호출
+3. [Usecase] `UploadPhotoUsecase` — 단일 파일 기준으로 아래 흐름 실행
+   - [Infrastructure] `HashCalculator.compute(buffer)` → SHA-256 hash 계산
+   - [Infrastructure] `PhotoFileStore.saveToTemp(buffer)` → 임시 경로에 저장
+   - [Domain] `PhotoStoragePath`로 `originals/YYYY/MM/DD/{UUID}.{ext}` 최종 경로 생성
+   - [Infrastructure] `PhotoFileStore.moveToFinal(tempPath, finalPath)` → 최종 경로로 이동
+   - [Infrastructure] `ExifParser.parse(finalPath)` → EXIF 파싱 (라이브러리 오류 시 에러 throw)
+   - [Usecase] ExifParser 에러 catch → 빈 EXIF로 계속
+   - [Infrastructure] `PhotoRepository.save(photo)` → DB 레코드 생성
+   - [Infrastructure] `ImageConverter.convert(finalPath)` → thumbnail, medium 생성
+4. [Presentation] 전체 결과를 배열로 반환
 
 ### 예외 흐름
 
 - **임시 저장 실패**: `PhotoFileStore`가 에러 throw → Usecase가 전파 → Presentation 로깅 후 500 응답
 - **최종 경로 이동 실패**: `PhotoFileStore`가 임시 파일 정리 후 에러 throw → Presentation 로깅 후 500 응답
 - **DB 기록 실패**: Usecase가 `PhotoFileStore.delete(finalPath)` 호출 후 에러 throw → Presentation 로깅 후 500 응답
-- **EXIF 파싱 실패**: `ExifParser`가 내부에서 처리하여 빈 EXIF 반환, 흐름 계속
+- **EXIF 파싱 실패**: `ExifParser`가 에러 throw → `UploadPhotoUsecase`가 catch 후 빈 EXIF로 흐름 계속
 - **변환 파일 생성 실패**: Usecase가 catch하여 `PhotoRepository.markNeedsConversion(id)` 호출 후 성공 응답
-- **다중 파일 중 일부 실패**: 실패 발생 시점에 이후 파일 처리를 중단하고, 이미 저장 완료된 파일을 역순으로 롤백(파일시스템 + DB 삭제)한다. 롤백 로직은 Usecase에 위치한다. (ADR-003)
+- **다중 파일 중 일부 실패**: `UploadPhotosUsecase`가 실패 발생 시점에 이후 파일 처리를 중단하고, 이미 저장 완료된 파일을 역순으로 롤백(파일시스템 + DB 삭제)한다. (ADR-003)
 
 ### 데이터 흐름
 
 - 입력: multipart/form-data (파일 바이너리 목록, 원본 파일명, MIME 타입)
-- 처리: 파일별 독립 실행 — 임시 저장 → hash 계산 → 이동 → EXIF 파싱 → DB 기록 → 변환 파일 생성
+- 처리: 파일별 독립 실행 — hash 계산 → 임시 저장 → 이동 → EXIF 파싱 → DB 기록 → 변환 파일 생성
 - 출력: `[{ id: string }]`
 - 저장 대상: 파일시스템(`originals/`, `thumbnails/`, `medium/`), MongoDB(`photos` 컬렉션)
 
@@ -97,12 +97,12 @@
 ### PhotoUploadController
 
 - 목적: 파일 업로드 HTTP 요청 처리
-- 책임: multipart 파싱, 파일별 UploadPhotoCommand 생성, Usecase 위임, 응답 반환, 에러 로깅
+- 책임: multipart 파싱, UploadPhotosCommand 생성, Usecase 위임, 응답 반환, 에러 로깅
 - 입력: multipart/form-data (여러 파일)
 - 출력: `[{ id: string }]` 또는 HTTP 에러 응답
-- 주요 처리: 요청 수신 → 파일별 커맨드 변환 → 파일별 Usecase 호출 → 하나라도 실패 시 전체 실패 처리 → 전체 성공 시 결과 배열 반환
-- 의존 대상: `UploadPhotoUsecase`
-- 관련 요구사항: REQ-F-005, REQ-NF-004
+- 주요 처리: 요청 수신 → 파일 목록 커맨드 변환 → UploadPhotosUsecase 호출 → 성공 시 결과 배열 반환, 실패 시 에러 로깅 후 500 응답
+- 의존 대상: `UploadPhotosUsecase`
+- 관련 요구사항: REQ-F-005
 
 ### DuplicateCheckController
 
@@ -113,6 +113,15 @@
 - 의존 대상: `CheckDuplicatesUsecase`
 - 관련 요구사항: REQ-F-001
 
+### UploadPhotosUsecase
+
+- 목적: 요청 단위 다중 파일 업로드 조율
+- 책임: 파일별 UploadPhotoUsecase 순차 호출, 성공한 파일 결과 추적, 실패 시 이후 처리 중단 및 이전 성공분 역순 롤백, 전체 성공/실패 결정
+- 입력: `UploadPhotosCommand` (파일 목록)
+- 출력: `[{ id: string }]` 또는 에러
+- 의존 대상: `UploadPhotoUsecase`
+- 관련 요구사항: REQ-F-005, REQ-NF-004
+
 ### UploadPhotoUsecase
 
 - 목적: 단일 파일 업로드 흐름 조율
@@ -120,7 +129,7 @@
 - 입력: `UploadPhotoCommand`
 - 출력: `{ id: string }`
 - 의존 대상: `PhotoFileStore`, `HashCalculator`, `PhotoRepository`, `ExifParser`, `ImageConverter`
-- 관련 요구사항: REQ-F-002, REQ-F-003, REQ-F-004, REQ-F-005, REQ-NF-001, REQ-NF-002
+- 관련 요구사항: REQ-F-002, REQ-F-003, REQ-F-004, REQ-NF-001, REQ-NF-002
 
 ### CheckDuplicatesUsecase
 
@@ -150,9 +159,9 @@
 ### ExifParser
 
 - 목적: 원본 파일에서 EXIF 추출
-- 책임: EXIF 파싱, 실패 시 빈 결과 반환
+- 책임: EXIF 파싱. EXIF가 없는 파일은 빈 객체 반환. 라이브러리 오류는 에러 throw.
 - 입력: 파일 경로
-- 출력: `Record<string, unknown>` (파싱 실패 시 빈 객체)
+- 출력: `Record<string, unknown>` (EXIF 없는 파일은 빈 객체)
 - 관련 요구사항: REQ-F-003
 
 ### HashCalculator
@@ -193,7 +202,7 @@
 
 - 목적: 파일 업로드 수신 및 저장 처리
 - 호출 주체: 클라이언트
-- 처리 주체: PhotoUploadController → UploadPhotoUsecase (파일별 반복)
+- 처리 주체: PhotoUploadController → UploadPhotosUsecase → (파일별) UploadPhotoUsecase
 - 입력: multipart/form-data (`files[]` 필드, 복수)
 - 출력: `[{ id: string }]` (성공한 파일의 UUID 목록)
 - 반환 규칙:
@@ -227,6 +236,7 @@
 | id | string | 필수 | UUID | 파일 고유 식별자, 파일명에도 사용 |
 | hash | string | 필수 | SHA-256 hex | 서버가 파일 수신 후 계산한 hash |
 | storagePath | string | 필수 | - | originals/ 기준 상대 경로 |
+| originalName | string | 필수 | - | 클라이언트 원본 파일명 |
 | capturedAt | Date \| null | 선택 | - | EXIF 기반 촬영 시각 |
 | gps | object \| null | 선택 | - | EXIF 기반 GPS 좌표. `{ lat: number, lng: number, altitude?: number }` |
 | uploadedAt | Date | 필수 | - | 업로드 시각 |
@@ -272,8 +282,8 @@
 | 임시 저장 실패 | Infrastructure | 에러 throw | 500 | Presentation |
 | 최종 경로 이동 실패 | Infrastructure | 임시 파일 정리 후 에러 throw | 500 | Presentation |
 | DB 기록 실패 | Infrastructure | 에러 throw → Usecase가 파일 삭제 후 re-throw | 500 | Presentation |
-| 원본 파일 삭제 실패 (롤백 시) | Usecase | 에러 로그 후 원래 에러 전파 | 500 | Presentation |
-| EXIF 파싱 실패 | Infrastructure | 내부 처리, 빈 EXIF 반환 | 흐름 계속 | 없음 |
+| 원본 파일 삭제 실패 (롤백 시) | Usecase | 원래 에러 전파 | 500 | Presentation |
+| EXIF 파싱 실패 (라이브러리 오류) | Infrastructure | 에러 throw → Usecase가 catch 후 빈 EXIF로 계속 | 흐름 계속 | 없음 |
 | 변환 파일 생성 실패 | Infrastructure | 에러 throw → Usecase가 needsConversion 기록 후 성공 처리 | 201 | 없음 |
 
 ---
@@ -284,7 +294,7 @@
 | ----- | -- | ----- | ------- | -- |
 | 파일시스템 | 파일 | 파일 저장·이동·삭제 | 에러 throw | import/pending, originals, thumbnails, medium 경로 |
 | MongoDB | DB | Photo 메타데이터 CRUD | 에러 throw | ADR-002 |
-| EXIF 파싱 라이브러리 | 라이브러리 | EXIF 추출 | 빈 결과 반환 | exifr 등 |
+| EXIF 파싱 라이브러리 | 라이브러리 | EXIF 추출 | 에러 throw → Usecase가 빈 EXIF로 처리 | exifr 등 |
 | 이미지 변환 라이브러리 | 라이브러리 | thumbnail·medium 생성 | needsConversion 기록 | sharp 등 |
 
 ---
@@ -297,11 +307,11 @@
 | REQ-F-002 | 파일 수신 및 저장 | UploadPhotoUsecase, PhotoFileStore, HashCalculator | hash 계산 → 임시 저장 → 최종 경로 이동 |
 | REQ-F-003 | EXIF 파싱 및 메타데이터 저장 | ExifParser, PhotoRepository | 파싱 실패 시 빈 EXIF로 저장 |
 | REQ-F-004 | 변환 파일 생성 | ImageConverter, UploadPhotoUsecase | 실패 시 needsConversion=true 기록 |
-| REQ-F-005 | 다중 파일 수신 및 처리 | PhotoUploadController, UploadPhotoUsecase | Controller가 파일별로 Usecase 호출, 전체 결과 배열 반환 |
+| REQ-F-005 | 다중 파일 수신 및 처리 | PhotoUploadController, UploadPhotosUsecase | Controller가 파일 목록을 커맨드로 변환, UploadPhotosUsecase가 파일별 처리 조율 및 결과 반환 |
 | REQ-NF-001 | 업로드 원자성 | UploadPhotoUsecase | 전 단계 완료 시 성공, 중간 실패 시 복구 |
 | REQ-NF-002 | 부분 실패 시 상태 일관성 | UploadPhotoUsecase, PhotoFileStore | DB 실패 시 Usecase가 파일 삭제 |
 | REQ-NF-003 | 원본 파일 불변성 | PhotoFileStore | 최종 경로 파일은 저장 이후 쓰기 접근하지 않음 |
-| REQ-NF-004 | 다중 파일 업로드 실패 정책 | PhotoUploadController | 파일 중 하나라도 실패 시 전체 요청을 실패 응답으로 처리 |
+| REQ-NF-004 | 다중 파일 업로드 실패 정책 | UploadPhotosUsecase | 파일 중 하나라도 실패 시 이후 처리 중단, 이전 성공분 역순 롤백, 전체 요청 실패로 전파 |
 
 ---
 
